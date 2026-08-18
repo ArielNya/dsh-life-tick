@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-heartbeat",
   "description": "Heartbeat plugin for DeepSeek Harness: wakes the agent on a configurable interval so it proactively reports progress, risks, or blockers — and makes small talk when there is nothing to report.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -11,6 +11,7 @@
       "types": "./types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -19,6 +20,15 @@
     "README.md",
     "LICENSE"
   ],
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
   "scripts": {
     "test": "node --test test/"
   },
