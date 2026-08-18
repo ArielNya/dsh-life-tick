@@ -7,10 +7,10 @@ export interface HeartbeatConfig {
   intervalSeconds?: number
   /** Instruction template delivered on each beat; `{{time}}` is substituted. */
   prompt?: string
-  /** Also register the `heartbeat` settings namespace for the Settings panel. Default `true`. */
-  settingsUi?: boolean
   /** Pause after this many unanswered beats; a real user message resumes. 0 disables. Default `3`. */
   pauseAfterMissed?: number
+  /** Absolute path of the user config file (default `<dshHome>/heartbeat.json`). */
+  configFile?: string
 }
 
 export const name: 'heartbeat'

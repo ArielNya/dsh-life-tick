@@ -5,9 +5,10 @@
  */
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { apply, Config, SettingsSchema, name, inject } from '../lib/index.js'
+import { apply, Config, name, inject, CONFIG_ROUTE_PATH } from '../lib/index.js'
+import { SettingsSchema } from '../lib/schema.js'
 import { HeartbeatRuntime, buildHeartbeatMessage, clampIntervalSeconds } from '../lib/runtime.js'
-import { renderPrompt, DEFAULT_PROMPT, SETTINGS_NAMESPACE } from '../lib/prompt.js'
+import { renderPrompt, DEFAULT_PROMPT } from '../lib/prompt.js'
 
 // ── fakes ──────────────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ test('Config schema applies defaults and bounds', () => {
   assert.equal(resolved.enabled, true)
   assert.equal(resolved.intervalSeconds, 600)
   assert.equal(resolved.prompt, DEFAULT_PROMPT)
-  assert.equal(resolved.settingsUi, true)
+  assert.equal(resolved.pauseAfterMissed, 3)
   assert.throws(() => Config({ intervalSeconds: 5 }))
   assert.throws(() => Config({ intervalSeconds: 90000 }))
 })
@@ -374,20 +375,8 @@ test('apply attaches a runtime to each root agent and cleans up', async () => {
   assert.equal(listeners.size, 0)
 })
 
-test('apply registers the heartbeat settings namespace when available', () => {
-  const registrations = new Map()
-  const settings = {
-    register: (ns, schema, options) => {
-      const scope = {
-        get: () => ({ ...options.base }),
-        watch: () => () => {},
-        update: () => Promise.resolve(),
-        replace: () => Promise.resolve(),
-      }
-      registrations.set(ns, { schema, options, scope })
-      return scope
-    },
-  }
+test('apply registers the config route on the web server', () => {
+  const routes = new Map()
   const injected = []
   const ctx = {
     logger: { info: () => {}, warn: () => {} },
@@ -398,33 +387,120 @@ test('apply registers the heartbeat settings namespace when available', () => {
   }
   const dispose = apply(ctx, { intervalSeconds: 900 })
   assert.equal(injected.length, 1)
-  const { callback } = injected[0]
+  const { deps, callback } = injected[0]
+  assert.deepEqual(deps, ['webServer'])
   const injectedCtx = {
-    settings,
-    effect: (cb) => {
-      const cleanup = cb()
-      cleanup?.()
-      return () => {}
+    webServer: {
+      register: (route) => {
+        routes.set(route.path, route)
+        return () => routes.delete(route.path)
+      },
     },
+    effect: () => () => {},
   }
   callback(injectedCtx)
-  assert.equal(registrations.has(SETTINGS_NAMESPACE), true)
-  const registration = registrations.get(SETTINGS_NAMESPACE)
-  assert.equal(registration.options.base.intervalSeconds, 900)
-  assert.equal(registration.scope.get().intervalSeconds, 900)
+  assert.equal(routes.has(CONFIG_ROUTE_PATH), true)
+  const route = routes.get(CONFIG_ROUTE_PATH)
+  assert.equal(route.kind, 'exact')
   dispose()
 })
 
-test('settingsUi: false skips the settings namespace', () => {
-  const injected = []
-  const ctx = {
-    logger: { info: () => {}, warn: () => {} },
-    agents: agentRegistry(),
-    on: () => () => {},
-    effect: () => () => {},
-    inject: (_deps, callback) => injected.push(callback),
+test('config route: GET serves the store, POST updates it, bad input rejects', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const file = path.join(os.tmpdir(), `hb-test-${Date.now()}.json`)
+  const { HeartbeatConfigStore } = await import('../lib/store.js')
+  const store = new HeartbeatConfigStore({ path: file, base: { intervalSeconds: 900 } })
+  const route = {
+    kind: 'exact',
+    path: CONFIG_ROUTE_PATH,
+    handler: async (req, res) => {
+      const chunks = []
+      for await (const chunk of req) chunks.push(chunk)
+      const body = Buffer.concat(chunks).toString('utf8')
+      try {
+        if (req.method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(store.get()))
+          return
+        }
+        if (req.method === 'POST') {
+          const patch = JSON.parse(body)
+          const next = store.update(patch)
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(next))
+          return
+        }
+        res.writeHead(405)
+        res.end()
+      } catch (error) {
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: error.message }))
+      }
+    },
   }
-  apply(ctx, { settingsUi: false })
-  assert.equal(injected.length, 1)
-  injected[0]({ effect: () => () => {}, settings: { register: () => { throw new Error('must not register') } } })
+  const collect = (response) => new Promise((resolve) => {
+    const chunks = []
+    response.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+    response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }))
+  })
+  const get = async () => {
+    const response = new EventEmitter()
+    response.writeHead = function (code) { this.statusCode = code }
+    response.end = function (data) { this.emit('data', data); this.emit('end') }
+    const done = collect(response)
+    await route.handler({ method: 'GET', [Symbol.asyncIterator]: async function* () {} }, response)
+    return done
+  }
+  const post = async (body) => {
+    const response = new EventEmitter()
+    response.writeHead = function (code) { this.statusCode = code }
+    response.end = function (data) { this.emit('data', data); this.emit('end') }
+    const done = collect(response)
+    await route.handler({ method: 'POST', body, [Symbol.asyncIterator]: async function* () { yield Buffer.from(body) } }, response)
+    return done
+  }
+  const EventEmitter = (await import('node:events')).EventEmitter
+
+  const initial = await get()
+  assert.equal(initial.status, 200)
+  assert.deepEqual(JSON.parse(initial.body), { enabled: true, intervalSeconds: 900, pauseAfterMissed: 3 })
+
+  const updated = await post(JSON.stringify({ intervalSeconds: 120 }))
+  assert.equal(updated.status, 200)
+  assert.deepEqual(JSON.parse(updated.body), { enabled: true, intervalSeconds: 120, pauseAfterMissed: 3 })
+
+  const bad = await post(JSON.stringify({ intervalSeconds: 1 }))
+  assert.equal(bad.status, 400)
+  assert.match(JSON.parse(bad.body).error, /expected number/)
+
+  fs.rmSync(file, { force: true })
+})
+
+// store 单测：文件层 + 校验 + watch
+test('HeartbeatConfigStore persists and validates', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const file = path.join(os.tmpdir(), `hb-store-${Date.now()}.json`)
+  const { HeartbeatConfigStore } = await import('../lib/store.js')
+
+  const store = new HeartbeatConfigStore({ path: file, base: { intervalSeconds: 600 } })
+  assert.equal(store.get().intervalSeconds, 600)
+  store.update({ intervalSeconds: 180 })
+  assert.equal(store.get().intervalSeconds, 180)
+  assert.equal(fs.existsSync(file), true)
+  assert.throws(() => store.update({ intervalSeconds: 1 }))
+
+  // 重新加载：文件层生效
+  const reloaded = new HeartbeatConfigStore({ path: file, base: { intervalSeconds: 600 } })
+  assert.equal(reloaded.get().intervalSeconds, 180)
+
+  const seen = []
+  const unwatch = reloaded.watch((config) => seen.push(config.intervalSeconds))
+  reloaded.update({ enabled: false })
+  assert.deepEqual(seen, [180])
+  unwatch()
+  fs.rmSync(file, { force: true })
 })

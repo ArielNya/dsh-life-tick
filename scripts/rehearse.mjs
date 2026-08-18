@@ -63,7 +63,7 @@ class FakeAgent {
   }
 }
 
-const registrations = []
+const routes = new Map()
 const registry = {
   live: new Map(),
   roots() {
@@ -79,12 +79,13 @@ const ctx = {
   on: () => () => {},
   effect: () => () => {},
   inject: (deps, callback) => {
-    if (deps.includes('settings')) {
+    if (deps.includes('webServer')) {
       callback({
-        settings: {
-          register: (ns, schema, options) => {
-            registrations.push({ ns, base: options.base })
-            return { get: () => ({ ...options.base }), watch: () => () => {}, update: async () => {}, replace: async () => {} }
+        webServer: {
+          register: (route) => {
+            routes.set(route.path, route)
+            console.log('  [route]', route.kind, route.path)
+            return () => routes.delete(route.path)
           },
         },
         effect: () => () => {},
@@ -93,8 +94,9 @@ const ctx = {
   },
 }
 
-console.log('applying plugin (mock ctx)…')
-apply(ctx, { intervalSeconds: 600 })
+console.log('applying plugin (mock ctx, temp config file)…')
+const tmpConfigFile = `/tmp/hb-rehearse-${Date.now()}.json`
+apply(ctx, { intervalSeconds: 600, configFile: tmpConfigFile })
 
 // The real plugin subscribes to agent/created; the mock on() swallowed the
 // listener, so drive the runtime path directly through a second apply with
@@ -116,7 +118,27 @@ const agent = new FakeAgent('rehearsal-agent')
 registry.live.set(agent.id, agent)
 listeners.get('agent/created')({ agent })
 
-console.log('settings registered:', registrations.map((r) => `${r.ns}=${JSON.stringify(r.base)}`).join(', '))
+// Exercise the config route end to end: GET then POST through the mock web server.
+const route = routes.get('/api/heartbeat/config')
+if (route === undefined) throw new Error('config route missing')
+const EventEmitter = (await import('node:events')).EventEmitter
+const roundtrip = async (method, body) => {
+  const response = new EventEmitter()
+  response.writeHead = function (code) { this.statusCode = code }
+  response.end = function (data) { this.emit('data', Buffer.from(data ?? '')); this.emit('end') }
+  const done = new Promise((resolve) => {
+    const chunks = []
+    response.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+    response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }))
+  })
+  await route.handler({ method, [Symbol.asyncIterator]: async function* () { if (body) yield Buffer.from(body) } }, response)
+  return done
+}
+const initial = await roundtrip('GET')
+console.log('  [route GET]', initial.status, initial.body)
+const updated = await roundtrip('POST', JSON.stringify({ intervalSeconds: 120 }))
+console.log('  [route POST]', updated.status, updated.body)
+if (JSON.parse(updated.body).intervalSeconds !== 120) throw new Error('POST did not apply')
 
 // Trigger the attached runtime's timer callback manually through its tick —
 // simulate one interval elapsing by reaching into the runtime via a fresh

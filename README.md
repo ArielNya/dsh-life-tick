@@ -15,11 +15,16 @@ DeepSeek Harness 的「心跳」插件：给 agent 装一个定时唤醒的闹�
 
 | 键 | 默认 | 含义 |
 |---|---|---|
-| `enabled` | `true` | 总开关 |
+| `enabled` | `true` | 总开关（用户层存在 `<dshHome>/heartbeat.json`） |
 | `intervalSeconds` | `600` | 心跳周期（钳制在 30–86400 秒） |
-| `prompt` | 内置 | 每拍投递的指令模板，`{{time}}` 会替换为当前时间 |
-| `settingsUi` | `true` | 同时注册 `heartbeat` settings 命名空间，`enabled` / `intervalSeconds` / `pauseAfterMissed` 出现在设置面板里，可热改 |
+| `prompt` | 内置 | 每拍投递的指令模板，`{{time}}` 会替换为当前时间（仅 composition 配置） |
 | `pauseAfterMissed` | `3` | 无人值守保护：连续 N 拍没有真人回复就自动暂停；用户下一条消息立即恢复并重新计时。`0` = 关闭 |
+| `configFile` | `<dshHome>/heartbeat.json` | 用户配置文件路径（`enabled` / `intervalSeconds` / `pauseAfterMissed`） |
+
+> 为什么不用 settings 面板的通用 namespace？DSH 的 settings wire 只服务一张
+> 硬编码白名单（`WEB_SETTINGS_NAMESPACES`），插件无法把自有 namespace 暴露给
+> 浏览器写入。本插件因此在 host 自建了 `GET/POST /api/heartbeat/config`
+> 路由，设置面板里的「心跳 Heartbeat」区块直连该路由，写入即热应用。
 
 ## 安装
 
