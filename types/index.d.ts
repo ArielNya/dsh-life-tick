@@ -9,6 +9,8 @@ export interface HeartbeatConfig {
   prompt?: string
   /** Also register the `heartbeat` settings namespace for the Settings panel. Default `true`. */
   settingsUi?: boolean
+  /** Pause after this many unanswered beats; a real user message resumes. 0 disables. Default `3`. */
+  pauseAfterMissed?: number
 }
 
 export const name: 'heartbeat'

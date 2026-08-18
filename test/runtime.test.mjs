@@ -40,6 +40,7 @@ class FakeAgent {
     this.inbox = new FakeInbox()
     this.followed = []
     this._cleanups = []
+    this._listeners = new Map()
     this.ctx = {
       effect: (callback) => {
         const raw = callback()
@@ -50,12 +51,23 @@ class FakeAgent {
         this._cleanups.push(cleanup)
         return cleanup
       },
+      on: (event, callback) => {
+        const key = Symbol()
+        this._listeners.set(key, { event, callback })
+        return () => this._listeners.delete(key)
+      },
     }
   }
   followup(message) {
     this.followed.push(message)
     this.inbox.state['next-turn'].push(message)
     this.status = 'running'
+  }
+  /** Fire a synthetic agent/inbox/inserted payload into the agent listeners. */
+  emitInserted(message) {
+    for (const { event, callback } of [...this._listeners.values()]) {
+      if (event === 'agent/inbox/inserted') callback({ message })
+    }
   }
   disposeCtx() {
     for (const cleanup of this._cleanups.splice(0)) cleanup?.()
@@ -124,6 +136,7 @@ const config = (overrides = {}) => ({
   enabled: true,
   intervalSeconds: 600,
   prompt: 'beat {{time}}',
+  pauseAfterMissed: 3,
   ...overrides,
 })
 
@@ -164,6 +177,84 @@ test('disabled config stays silent', () => {
   const runtime = new HeartbeatRuntime(agent, { readConfig: () => config({ enabled: false }) })
   runtime.tick()
   assert.equal(agent.followed.length, 0)
+})
+
+// ── unattended guard ────────────────────────────────────────────────────────
+
+test('pauses after pauseAfterMissed unanswered beats', () => {
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config({ pauseAfterMissed: 3 }) })
+  runtime.tick()
+  agent.inbox.claim('next-turn')
+  runtime.tick()
+  agent.inbox.claim('next-turn')
+  runtime.tick() // third beat delivered, still no reply
+  assert.equal(agent.followed.length, 3)
+  agent.inbox.claim('next-turn')
+  runtime.tick() // fourth tick: guard trips, stays silent
+  assert.equal(agent.followed.length, 3)
+  assert.equal(runtime.paused, true)
+  runtime.tick()
+  assert.equal(agent.followed.length, 3)
+})
+
+test('a real user message resumes a paused runtime', () => {
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config({ pauseAfterMissed: 2 }) })
+  runtime.start()
+  runtime.tick()
+  agent.inbox.claim('next-turn')
+  runtime.tick() // missedCount = 2
+  agent.inbox.claim('next-turn')
+  runtime.tick() // paused
+  assert.equal(agent.followed.length, 2)
+  assert.equal(runtime.paused, true)
+  agent.emitInserted({ id: 'user-1', source: { kind: 'user' } })
+  assert.equal(runtime.paused, false)
+  assert.equal(runtime.missedCount, 0)
+  runtime.tick()
+  assert.equal(agent.followed.length, 3)
+  runtime.dispose()
+})
+
+test('non-user inbox messages do not reset the guard', () => {
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config({ pauseAfterMissed: 2 }) })
+  runtime.start()
+  runtime.tick()
+  agent.inbox.claim('next-turn')
+  runtime.tick()
+  agent.inbox.claim('next-turn')
+  agent.emitInserted({ id: 'hb-1', source: { kind: 'plugin', plugin: 'heartbeat' } })
+  runtime.tick() // still trips despite the plugin message
+  assert.equal(runtime.paused, true)
+  assert.equal(agent.followed.length, 2)
+  runtime.dispose()
+})
+
+test('a user message before the threshold resets the counter', () => {
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config({ pauseAfterMissed: 3 }) })
+  runtime.start()
+  for (let i = 0; i < 5; i += 1) {
+    runtime.tick()
+    agent.inbox.claim('next-turn')
+    if (i % 2 === 1) agent.emitInserted({ id: `user-${i}`, source: { kind: 'user' } })
+  }
+  assert.equal(runtime.paused, false)
+  assert.equal(agent.followed.length, 5)
+  runtime.dispose()
+})
+
+test('pauseAfterMissed: 0 disables the guard entirely', () => {
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config({ pauseAfterMissed: 0 }) })
+  for (let i = 0; i < 8; i += 1) {
+    runtime.tick()
+    agent.inbox.claim('next-turn')
+  }
+  assert.equal(runtime.paused, false)
+  assert.equal(agent.followed.length, 8)
 })
 
 test('tick re-reads config every time (hot reload)', () => {
