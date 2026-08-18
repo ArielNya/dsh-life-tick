@@ -17,10 +17,14 @@
   "files": [
     "lib/**",
     "types/**",
+    "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
