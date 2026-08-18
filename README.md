@@ -18,7 +18,8 @@ DeepSeek Harness 的「心跳」插件：给 agent 装一个定时唤醒的闹�
 | `enabled` | `true` | 总开关 |
 | `intervalSeconds` | `600` | 心跳周期（钳制在 30–86400 秒） |
 | `prompt` | 内置 | 每拍投递的指令模板，`{{time}}` 会替换为当前时间 |
-| `settingsUi` | `true` | 同时注册 `heartbeat` settings 命名空间，`enabled` / `intervalSeconds` 出现在设置面板里，可热改 |
+| `settingsUi` | `true` | 同时注册 `heartbeat` settings 命名空间，`enabled` / `intervalSeconds` / `pauseAfterMissed` 出现在设置面板里，可热改 |
+| `pauseAfterMissed` | `3` | 无人值守保护：连续 N 拍没有真人回复就自动暂停；用户下一条消息立即恢复并重新计时。`0` = 关闭 |
 
 ## 安装
 
