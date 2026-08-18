@@ -209,6 +209,20 @@ test('timer chain re-arms from the latest config', (t) => {
   assert.equal(agent.followed.length, 2)
 })
 
+test('reschedule re-arms immediately from the latest config', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const agent = new FakeAgent()
+  const state = { enabled: true, intervalSeconds: 600 }
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config(state) })
+  runtime.start() // fire at t=600s
+  t.mock.timers.tick(100_000) // t=100s
+  state.intervalSeconds = 120
+  runtime.reschedule() // next fire moves to t=220s
+  t.mock.timers.tick(120_000)
+  assert.equal(agent.followed.length, 1)
+  runtime.dispose()
+})
+
 test('dispose cancels the armed timer', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const agent = new FakeAgent()
