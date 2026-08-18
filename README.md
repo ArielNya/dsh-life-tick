@@ -20,25 +20,15 @@ DeepSeek Harness 的「心跳」插件：给 agent 装一个定时唤醒的闹�
 dsh plugin --profile <profile> add dsh-plugin-heartbeat
 ```
 
-（包内置 `dsh.bundle` manifest，`dsh plugin add` 会自动把 insert 挂进 profile 的 patch 层；dsh-market 里的一键安装同此通道。）
-
-或手动安装：
-
-```sh
-pnpm add dsh-plugin-heartbeat
-```
-
-然后在 profile 的 `cordis.patch.yml` 里加一行：
-
-```yaml
-- insert:
-    - id: dsh-heartbeat
-      name: dsh-plugin-heartbeat
-      config:
-        intervalSeconds: 600
-```
+（包内置 `dsh.bundle` manifest，`dsh plugin add` 会把它自动挂进 profile 的 bundles 层；dsh-market 里的一键安装同此通道。）
 
 重启 DSH 后生效。之后在 **设置 → 心跳 Heartbeat** 面板里随时改频率、开关与暂停阈值，保存即热应用（无需重启）。
+
+> ⚠️ **不要**再往 profile 的 `cordis.patch.yml` 里手写 `- insert: {id: dsh-heartbeat, ...}`：
+> 那会与 bundle manifest 的自动挂载产生两条同名 entry，整个 profile 会以
+> `duplicate loader entry id "dsh-heartbeat"` 启动失败（2026-08-18 实机事故，
+> 当时撞的是 memory 插件的同名条目）。运行期配置走 `<dshHome>/heartbeat.json`；
+> 覆盖 composition 键（如 `prompt`）用**不带 insert 的 id 覆盖条目**，见下。
 
 ## 配置
 
@@ -50,17 +40,15 @@ pnpm add dsh-plugin-heartbeat
 | `prompt` | 内置 | 每拍投递的指令模板，`{{time}}` 会替换为当前时间（仅 composition 配置） |
 | `configFile` | `<dshHome>/heartbeat.json` | 用户配置文件路径（`enabled` / `intervalSeconds` / `pauseAfterMissed`） |
 
-自定义心跳提示词（composition 配置）：
+自定义心跳提示词（composition 配置，**不带 `insert`**，避免与 bundle 层重复）：
 
 ```yaml
-- insert:
-    - id: dsh-heartbeat
-      name: dsh-plugin-heartbeat
-      config:
-        prompt: |
-          【心跳】当前时间 {{time}}。看一眼最近的对话和待办：
-          有进展说进展、有风险说风险；都没有就一句话带过。
-          总长不超过 5 句，中文。
+- id: dsh-heartbeat
+  config:
+    prompt: |
+      【心跳】当前时间 {{time}}。看一眼最近的对话和待办：
+      有进展说进展、有风险说风险；都没有就一句话带过。
+      总长不超过 5 句，中文。
 ```
 
 > 为什么不用 settings 面板的通用 namespace？DSH 的 settings wire 只服务一张
