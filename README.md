@@ -17,6 +17,14 @@ DeepSeek Harness 的「心跳」插件：给 agent 装一个定时唤醒的闹�
 ## 安装
 
 ```sh
+dsh plugin --profile <profile> add dsh-plugin-heartbeat
+```
+
+（包内置 `dsh.bundle` manifest，`dsh plugin add` 会自动把 insert 挂进 profile 的 patch 层；dsh-market 里的一键安装同此通道。）
+
+或手动安装：
+
+```sh
 pnpm add dsh-plugin-heartbeat
 ```
 
