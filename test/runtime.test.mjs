@@ -7,7 +7,7 @@ import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { apply, Config, name, inject, CONFIG_ROUTE_PATH } from '../lib/index.js'
 import { SettingsSchema } from '../lib/schema.js'
-import { HeartbeatRuntime, buildHeartbeatMessage, clampIntervalSeconds } from '../lib/runtime.js'
+import { HeartbeatRuntime, buildHeartbeatMessage, clampIntervalSeconds, buildSchedule } from '../lib/runtime.js'
 import { renderPrompt, DEFAULT_PROMPT } from '../lib/prompt.js'
 
 // ── fakes ──────────────────────────────────────────────────────────────────
@@ -100,8 +100,27 @@ test('Config schema applies defaults and bounds', () => {
   assert.equal(resolved.intervalSeconds, 600)
   assert.equal(resolved.prompt, DEFAULT_PROMPT)
   assert.equal(resolved.pauseAfterMissed, 3)
+  assert.equal(resolved.compactBeforeBeat, true)
+  assert.equal(resolved.maxBeatsPerHour, 0)
+  assert.equal(resolved.backoffSeconds, undefined)
   assert.throws(() => Config({ intervalSeconds: 5 }))
   assert.throws(() => Config({ intervalSeconds: 90000 }))
+})
+
+test('buildSchedule: derived tiers from intervalSeconds × pauseAfterMissed', () => {
+  assert.deepEqual(buildSchedule({ intervalSeconds: 600, pauseAfterMissed: 3 }), [600, 1200, 1800])
+  assert.deepEqual(buildSchedule({ intervalSeconds: 600, pauseAfterMissed: 0 }), [600])
+})
+
+test('buildSchedule: explicit backoffSeconds wins and is made monotonic', () => {
+  assert.deepEqual(
+    buildSchedule({ intervalSeconds: 600, backoffSeconds: [600, 900, 1800] }),
+    [600, 900, 1800],
+  )
+  assert.deepEqual(
+    buildSchedule({ intervalSeconds: 600, backoffSeconds: [900, 600, 1200] }),
+    [900, 900, 1200],
+  )
 })
 
 test('SettingsSchema shares the bounds', () => {
@@ -282,19 +301,19 @@ test('dead agent stops the runtime', () => {
   assert.equal(runtime.disposed, true)
 })
 
-test('timer chain re-arms from the latest config', (t) => {
+test('timer chain re-arms with backoff from the latest config', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const agent = new FakeAgent()
   const state = { enabled: true, intervalSeconds: 600 }
   const runtime = new HeartbeatRuntime(agent, { readConfig: () => config(state) })
-  runtime.start() // t=0, armed for 600s
+  runtime.start() // t=0, armed for 600s (tier 0)
   state.intervalSeconds = 1200 // change before the first fire
-  t.mock.timers.tick(600_000) // t=600: fire #1, re-arm for t=1800
+  t.mock.timers.tick(600_000) // t=600: fire #1, re-arm tier 1 = 2×1200s
   assert.equal(agent.followed.length, 1)
-  agent.inbox.claim('next-turn') // the loop consumed the first beat
-  t.mock.timers.tick(600_000) // t=1200: half of the new interval — silent
+  agent.inbox.claim('next-turn')
+  t.mock.timers.tick(600_000) // t=1200: silent (inside the 2400s tier)
   assert.equal(agent.followed.length, 1)
-  t.mock.timers.tick(600_000) // t=1800: fire #2
+  t.mock.timers.tick(1800_000) // t=3000: fire #2
   assert.equal(agent.followed.length, 2)
   runtime.dispose()
   t.mock.timers.tick(24 * 3600_000)
@@ -386,8 +405,9 @@ test('apply registers the config route on the web server', () => {
     inject: (deps, callback) => injected.push({ deps, callback }),
   }
   const dispose = apply(ctx, { intervalSeconds: 900 })
-  assert.equal(injected.length, 1)
-  const { deps, callback } = injected[0]
+  const web = injected.find(({ deps }) => deps[0] === 'webServer')
+  assert.ok(web, 'webServer injection registered')
+  const { deps, callback } = web
   assert.deepEqual(deps, ['webServer'])
   const injectedCtx = {
     webServer: {
@@ -503,4 +523,115 @@ test('HeartbeatConfigStore persists and validates', async () => {
   assert.deepEqual(seen, [180])
   unwatch()
   fs.rmSync(file, { force: true })
+})
+
+// ── v0.4.0: backoff, hard stop, lightweight wake-ups ────────────────────────
+
+test('backoff chain: 10min → 20min → 30min, then hard stop with no further beats', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config() }) // 600s, pauseAfterMissed 3
+  runtime.start() // t=0: tier 0 = 600s
+  t.mock.timers.tick(600_000) // t=600: beat #1, missed=1, re-arm tier 1 = 1200s
+  assert.equal(agent.followed.length, 1)
+  agent.inbox.claim('next-turn')
+  t.mock.timers.tick(1200_000) // t=1800: beat #2, missed=2, re-arm tier 2 = 1800s
+  assert.equal(agent.followed.length, 2)
+  agent.inbox.claim('next-turn')
+  t.mock.timers.tick(1800_000) // t=3600: beat #3, missed=3
+  assert.equal(agent.followed.length, 3)
+  agent.inbox.claim('next-turn')
+  t.mock.timers.tick(1800_000) // t=5400: hard stop — no beat, timer dropped
+  assert.equal(agent.followed.length, 3)
+  assert.equal(runtime.paused, true)
+  assert.equal(runtime.timer, undefined)
+  t.mock.timers.tick(10 * 3600_000) // stays stopped without a user message
+  assert.equal(agent.followed.length, 3)
+  runtime.dispose()
+})
+
+test('hard stop drops the timer (token guard) even at pauseAfterMissed: 1', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config({ pauseAfterMissed: 1 }) })
+  runtime.start()
+  t.mock.timers.tick(600_000) // beat #1, missed=1
+  assert.equal(agent.followed.length, 1)
+  agent.inbox.claim('next-turn')
+  t.mock.timers.tick(600_000) // gate trips: pause, timer cleared
+  assert.equal(agent.followed.length, 1)
+  assert.equal(runtime.paused, true)
+  assert.equal(runtime.timer, undefined)
+  t.mock.timers.tick(3600_000)
+  assert.equal(agent.followed.length, 1)
+  runtime.dispose()
+})
+
+test('a user message mid-backoff resets to tier 0 and re-arms from that moment', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, { readConfig: () => config() })
+  runtime.start() // t=0: beat at t=600
+  t.mock.timers.tick(600_000) // beat #1, missed=1 → next at t=1800
+  assert.equal(agent.followed.length, 1)
+  agent.inbox.claim('next-turn')
+  t.mock.timers.tick(300_000) // t=900
+  agent.emitInserted({ id: 'user-1', source: { kind: 'user' } }) // full reset
+  assert.equal(runtime.missedCount, 0)
+  t.mock.timers.tick(600_000) // t=1500: beat #2 (600s after the user message)
+  assert.equal(agent.followed.length, 2)
+  runtime.dispose()
+})
+
+test('hourly cap skips beats beyond the budget without pausing', () => {
+  const agent = new FakeAgent()
+  const runtime = new HeartbeatRuntime(agent, {
+    readConfig: () => config({ maxBeatsPerHour: 2, pauseAfterMissed: 0 }),
+  })
+  runtime.tick()
+  agent.inbox.claim('next-turn')
+  runtime.tick()
+  agent.inbox.claim('next-turn')
+  runtime.tick() // third beat within the window: skipped, not counted
+  assert.equal(agent.followed.length, 2)
+  assert.equal(runtime.paused, false)
+  assert.equal(runtime.beatTimes.length, 2)
+})
+
+test('pre-beat compaction runs for an idle agent when available', async () => {
+  const agent = new FakeAgent()
+  const calls = []
+  const compaction = { compactNow: async () => { calls.push('compact'); return { ok: true } } }
+  const runtime = new HeartbeatRuntime(agent, {
+    readConfig: () => config(),
+    getCompaction: () => compaction,
+  })
+  await runtime.tick()
+  assert.deepEqual(calls, ['compact'])
+  assert.equal(agent.followed.length, 1)
+})
+
+test('pre-beat compaction is skipped when disabled', async () => {
+  const agent = new FakeAgent()
+  const calls = []
+  const compaction = { compactNow: async () => { calls.push('compact'); return {} } }
+  const runtime = new HeartbeatRuntime(agent, {
+    readConfig: () => config({ compactBeforeBeat: false }),
+    getCompaction: () => compaction,
+  })
+  await runtime.tick()
+  assert.equal(calls.length, 0)
+  assert.equal(agent.followed.length, 1)
+})
+
+test('pre-beat compaction failure never blocks the beat', async () => {
+  const agent = new FakeAgent()
+  const compaction = { compactNow: async () => { throw new Error('boom') } }
+  const runtime = new HeartbeatRuntime(agent, {
+    readConfig: () => config(),
+    getCompaction: () => compaction,
+    logger: { info: () => {}, warn: () => {} },
+  })
+  await runtime.tick()
+  assert.equal(agent.followed.length, 1)
 })
