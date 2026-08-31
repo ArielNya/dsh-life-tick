@@ -1,30 +1,24 @@
 /**
- * Pre-flight rehearsal: load the plugin EXACTLY as the profile will —
- * from the profile's own node_modules copy — and drive apply() through a
- * realistic mock context, then fire one heartbeat tick through a fake
- * agent to verify the followup/inbox wiring end to end.
- *
+ * Pre-flight rehearsal against a profile-installed copy.
  * Run: node scripts/rehearse.mjs
  */
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const profileDir = '/Users/crazy/.dsh/profiles/desktop'
-const packagePath = require.resolve('dsh-plugin-heartbeat/package.json', { paths: [profileDir] })
+const profileDir = process.env.DSH_PROFILE_DIR || `${process.env.HOME}/.dsh/profiles/web`
+const packagePath = require.resolve('dsh-life-tick/package.json', { paths: [profileDir] })
 const packageJson = require(packagePath)
 const entryUrl = packagePath.replace(/package\.json$/, packageJson.exports['.'].default)
 const plugin = await import(entryUrl)
 
 console.log(`loaded ${packageJson.name}@${packageJson.version} from ${packagePath}`)
 
-// ── loader-shape assertions ──────────────────────────────────────────────
 const apply = plugin.default ?? plugin.apply
 if (typeof apply !== 'function') throw new Error('default export is not callable')
 if (apply.name !== plugin.name) throw new Error(`metadata lost: ${apply.name} !== ${plugin.name}`)
 if (!Array.isArray(apply.inject) || apply.inject[0] !== 'agents') throw new Error('inject metadata lost')
 if (typeof apply.Config !== 'function') throw new Error('Config schema lost')
 
-// ── mock runtime ─────────────────────────────────────────────────────────
 class FakeInbox {
   constructor() {
     this.state = { 'next-turn': [], 'next-step': [] }
@@ -46,6 +40,8 @@ class FakeInbox {
 class FakeAgent {
   constructor(id) {
     this.id = id
+    this.presetId = 'home'
+    this.meta = { agentPreset: 'home' }
     this.status = 'idle'
     this.inbox = new FakeInbox()
     this.followed = []
@@ -54,6 +50,7 @@ class FakeAgent {
         const cleanup = callback()
         return () => cleanup?.()
       },
+      on: () => () => {},
     }
   }
   followup(message) {
@@ -95,12 +92,9 @@ const ctx = {
 }
 
 console.log('applying plugin (mock ctx, temp config file)…')
-const tmpConfigFile = `/tmp/hb-rehearse-${Date.now()}.json`
-apply(ctx, { intervalSeconds: 600, configFile: tmpConfigFile })
+const tmpConfigFile = `/tmp/lt-rehearse-${Date.now()}.json`
+apply(ctx, { configFile: tmpConfigFile })
 
-// The real plugin subscribes to agent/created; the mock on() swallowed the
-// listener, so drive the runtime path directly through a second apply with
-// a listener-capturing ctx.
 const listeners = new Map()
 const ctx2 = {
   logger: { info: () => {}, warn: (m) => console.log('  [warn]', m) },
@@ -112,14 +106,13 @@ const ctx2 = {
   effect: (callback) => callback(),
   inject: () => {},
 }
-apply(ctx2, { intervalSeconds: 60 })
+apply(ctx2, { configFile: tmpConfigFile })
 
 const agent = new FakeAgent('rehearsal-agent')
 registry.live.set(agent.id, agent)
 listeners.get('agent/created')({ agent })
 
-// Exercise the config route end to end: GET then POST through the mock web server.
-const route = routes.get('/api/heartbeat/config')
+const route = routes.get('/api/life-tick/config')
 if (route === undefined) throw new Error('config route missing')
 const EventEmitter = (await import('node:events')).EventEmitter
 const roundtrip = async (method, body) => {
@@ -136,25 +129,37 @@ const roundtrip = async (method, body) => {
 }
 const initial = await roundtrip('GET')
 console.log('  [route GET]', initial.status, initial.body)
-const updated = await roundtrip('POST', JSON.stringify({ intervalSeconds: 120 }))
+const updated = await roundtrip('POST', JSON.stringify({ meanDayMin: 30 }))
 console.log('  [route POST]', updated.status, updated.body)
-if (JSON.parse(updated.body).intervalSeconds !== 120) throw new Error('POST did not apply')
+if (JSON.parse(updated.body).meanDayMin !== 30) throw new Error('POST did not apply')
 
-// Trigger the attached runtime's timer callback manually through its tick —
-// simulate one interval elapsing by reaching into the runtime via a fresh
-// HeartbeatRuntime instance (the plugin does not expose the runtime map).
-const { HeartbeatRuntime } = await import(entryUrl)
-const runtime = new HeartbeatRuntime(agent, {
-  readConfig: () => ({ enabled: true, intervalSeconds: 60, prompt: '【心跳】{{time}}' }),
-  agents: registry,
+const { LifeTickRuntime } = await import(entryUrl)
+const runtime = new LifeTickRuntime(agent, {
+  readConfig: () => ({
+    enabled: true,
+    timezone: 'America/Sao_Paulo',
+    quietStart: 23,
+    quietEnd: 8,
+    meanDayMin: 45,
+    meanNightMin: 180,
+    maxWakesPerDay: 8,
+    maxVisiblePerDay: 3,
+    maxWakesPerHour: 0,
+    pauseAfterMissed: 5,
+    lifeDir: '/tmp/companion-life-rehearse',
+    compactBeforeBeat: false,
+  }),
+  forceKind: 'glance',
+  delayMs: 1000,
 })
+runtime.lastHumanAt = Date.now() - 2 * 3600_000
 runtime.tick()
 const message = agent.followed[0]
-if (!message) throw new Error('no heartbeat message delivered')
-if (message.role !== 'user' || message.source.kind !== 'plugin' || message.source.plugin !== 'heartbeat') {
+if (!message) throw new Error('no life-tick message delivered')
+if (message.role !== 'user' || message.source.kind !== 'plugin' || message.source.plugin !== 'life-tick') {
   throw new Error(`bad message shape: ${JSON.stringify({ role: message.role, source: message.source })}`)
 }
-console.log('heartbeat delivered:', JSON.stringify(message.content[0].text).slice(0, 80), '…')
+console.log('life-tick delivered:', JSON.stringify(message.content[0].text).slice(0, 80), '…')
 runtime.dispose()
 
 console.log('✔ pre-flight rehearsal passed')

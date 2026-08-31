@@ -1,24 +1,29 @@
 import type { Context } from '@deepseek-ai/cordis'
 
-export interface HeartbeatConfig {
-  /** Master switch for every session. Default `true`. */
+export interface LifeTickConfig {
   enabled?: boolean
-  /** Heartbeat period in seconds, clamped to 30–86400. Default `600`. */
-  intervalSeconds?: number
-  /** Instruction template delivered on each beat; `{{time}}` is substituted. */
-  prompt?: string
-  /** Pause after this many unanswered beats; a real user message resumes. 0 disables. Default `3`. */
+  timezone?: string
+  quietStart?: number
+  quietEnd?: number
+  meanDayMin?: number
+  meanNightMin?: number
+  maxWakesPerDay?: number
+  maxVisiblePerDay?: number
+  maxWakesPerHour?: number
   pauseAfterMissed?: number
-  /** Absolute path of the user config file (default `<dshHome>/heartbeat.json`). */
+  presetIds?: string[]
+  lifeDir?: string
+  attachWhenUnknown?: boolean
+  prompt?: string
   configFile?: string
+  compactBeforeBeat?: boolean
 }
 
-export const name: 'heartbeat'
+export const name: 'life-tick'
 export const inject: ['agents']
 
-/** Schemastery schema applied to the plugin config before startup. */
-export const Config: import('@deepseek-ai/schemastery').default<HeartbeatConfig>
+export const Config: import('@deepseek-ai/schemastery').default<LifeTickConfig>
 
-export function apply(ctx: Context, config?: HeartbeatConfig): () => void
+export function apply(ctx: Context, config?: LifeTickConfig): () => void
 
 export default apply

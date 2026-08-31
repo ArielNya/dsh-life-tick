@@ -1,10 +1,8 @@
-# dsh-plugin-heartbeat bundle layer.
+# dsh-life-tick bundle layer.
 #
-# Declared via the `dsh.bundle.patch` manifest in package.json, so
-# `dsh plugin add dsh-plugin-heartbeat` (and the dsh-market install flow)
-# mounts this insert automatically. User-level overrides — including the
-# hot-editable `enabled` / `intervalSeconds` / `pauseAfterMissed` — live in
-# <dshHome>/heartbeat.json, managed by the settings panel.
+# Declared via `dsh.bundle.patch` in package.json, so
+# `dsh plugin add github:ArielNya/dsh-life-tick` mounts this insert
+# automatically. User-level overrides live in <dshHome>/life-tick.json.
 - insert:
-    - id: dsh-heartbeat
-      name: dsh-plugin-heartbeat
+    - id: dsh-life-tick
+      name: dsh-life-tick

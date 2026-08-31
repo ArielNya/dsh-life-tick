@@ -1,7 +1,7 @@
 {
-  "name": "dsh-plugin-heartbeat",
-  "description": "Heartbeat plugin for DeepSeek Harness: wakes the agent on a configurable interval so it proactively reports progress, risks, or blockers — and makes small talk when there is nothing to report.",
-  "version": "0.4.2",
+  "name": "dsh-life-tick",
+  "description": "Irregular companion life-ticks for DeepSeek Harness: Poisson wakes, silent/private/dream/glance/reach lottery, home-preset only.",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -31,7 +31,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/*.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -42,6 +42,8 @@
     "cordis",
     "plugin",
     "heartbeat",
+    "life-tick",
+    "companion",
     "proactive",
     "agent"
   ],
@@ -51,10 +53,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LittleBlackTong/dsh-plugin-heartbeat.git"
+    "url": "git+https://github.com/ArielNya/dsh-life-tick.git"
   },
   "bugs": {
-    "url": "https://github.com/LittleBlackTong/dsh-plugin-heartbeat/issues"
+    "url": "https://github.com/ArielNya/dsh-life-tick/issues"
   },
-  "homepage": "https://github.com/LittleBlackTong/dsh-plugin-heartbeat#readme"
+  "homepage": "https://github.com/ArielNya/dsh-life-tick#readme"
 }
