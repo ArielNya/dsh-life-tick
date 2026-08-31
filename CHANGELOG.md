@@ -2,6 +2,12 @@
 
 所有记录跟随 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格；版本号与 `package.json` 保持一致。
 
+## [0.4.2] - 2026-08-31
+
+### Changed
+
+- **适配 DSH 0.1.2-alpha.1**：移除 `dsh.client.inject` 里已废弃的 `@deepseek-ai/dsh-client-runtime`（新版宿主已合并进 `dsh-client-modules`，且本插件客户端半只依赖 `react` 平台种子模块）。
+
 ## [0.4.1] - 2026-08-24
 
 ### Changed
