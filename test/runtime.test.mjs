@@ -185,6 +185,8 @@ test('busy ticks coalesce: replace, never pile up', () => {
   assert.equal(agent.followed.length, 1)
   assert.equal(agent.inbox.state['next-turn'].length, 1)
   assert.equal(agent.inbox.state['next-turn'][0].id, runtime.pendingId)
+  assert.equal(runtime.missedCount, 1)
+  assert.equal(runtime.wakesToday, 1)
 })
 
 test('once claimed, the next tick sends a fresh message', () => {
