@@ -97,6 +97,7 @@ test('extractAssistantText', () => {
 })
 
 test('resolvePresetId / shouldAttach', () => {
+  assert.equal(resolvePresetId({ session: { header: { agentPreset: 'home' } } }), 'home')
   assert.equal(resolvePresetId({ meta: { agentPreset: 'home' } }), 'home')
   assert.equal(resolvePresetId({ session: { meta: { agentPreset: 'work' } } }), 'work')
   assert.equal(resolvePresetId({ presetId: 'home' }), 'home')

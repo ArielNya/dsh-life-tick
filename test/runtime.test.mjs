@@ -36,6 +36,7 @@ class FakeAgent {
     this.id = id
     this.presetId = presetId
     this.meta = { agentPreset: presetId }
+    this.session = { header: { agentPreset: presetId } }
     this.status = 'idle'
     this.inbox = new FakeInbox()
     this.followed = []
@@ -203,13 +204,14 @@ test('disabled config stays silent', () => {
   assert.equal(agent.followed.length, 0)
 })
 
-test('NO_PING does not count as a visible ping', () => {
+test('NO_PING does not count as a visible ping and rolls back missedCount', () => {
   const agent = new FakeAgent()
   const runtime = runtimeFor(agent, { pauseAfterMissed: 1 })
   runtime.start()
   runtime.lastHumanAt = Date.now() - TWO_HOURS
   runtime.tick()
   assert.equal(agent.followed.length, 1)
+  assert.equal(runtime.missedCount, 1)
   runtime.onAssistantText('NO_PING')
   assert.equal(runtime.visiblePingsToday, 0)
   assert.equal(runtime.missedCount, 0)
@@ -220,7 +222,18 @@ test('NO_PING does not count as a visible ping', () => {
   runtime.dispose()
 })
 
-test('a real visible reply increments missedCount and can pause', () => {
+test('visible glance counts as missed immediately so pause works without assistant events', () => {
+  const agent = new FakeAgent()
+  const runtime = runtimeFor(agent, { pauseAfterMissed: 1 })
+  runtime.tick()
+  assert.equal(runtime.missedCount, 1)
+  agent.inbox.claim('next-turn')
+  runtime.tick()
+  assert.equal(runtime.paused, true)
+  assert.equal(agent.followed.length, 1)
+})
+
+test('a real visible reply increments visiblePingsToday and can pause', () => {
   const agent = new FakeAgent()
   const runtime = runtimeFor(agent, { pauseAfterMissed: 1 })
   runtime.start()
@@ -261,6 +274,7 @@ test('private kind still delivers but is not visible', () => {
   runtime.tick()
   assert.equal(agent.followed.length, 1)
   assert.match(agent.followed[0].content[0].text, /kind=private/)
+  assert.equal(runtime.missedCount, 0)
   runtime.onAssistantText('NO_PING')
   assert.equal(runtime.visiblePingsToday, 0)
 })
